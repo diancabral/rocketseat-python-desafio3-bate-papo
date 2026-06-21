@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rocketseat Sala de Bate-Papo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="min-h-screen bg-slate-100 text-slate-900 antialiased">
+    <div id="root"></div>
+
+    <script
+      crossorigin
+      src="https://unpkg.com/react@18/umd/react.development.js"
+    ></script>
+    <script
+      crossorigin
+      src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"
+    ></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"
+      integrity="sha512-q/dWJ3kcmjBLU4Qc47E4A9kTB4m3wuTY7vkFJDTZKjTs8jhyGQnaUrxa0Ytd0ssMZhbNua9hE+E7Qv1j+DyZwA=="
+      crossorigin="anonymous"
+    ></script>
+    <script>
+      Babel.registerPreset('react-classic', {
+        presets: [[Babel.availablePresets['react'], { runtime: 'classic' }]],
+      });
+    </script>
+
+    <script type="text/babel" data-presets="react-classic">
+      const typingDotDelays = [
+        { animationDelay: '0ms' },
+        { animationDelay: '150ms' },
+        { animationDelay: '300ms' },
+      ];
+
+      const TYPING_STOP_DEBOUNCE_MS = 1000;
+
+      function App() {
+        const [nameInput, setNameInput] = React.useState('');
+        const [userName, setUserName] = React.useState(null);
+        const [messages, setMessages] = React.useState([]);
+        const [messageInput, setMessageInput] = React.useState('');
+        const [remoteTypingName, setRemoteTypingName] = React.useState(null);
+        const socketRef = React.useRef(null);
+        const messageIdRef = React.useRef(0);
+        const messagesEndRef = React.useRef(null);
+        const typingActiveRef = React.useRef(false);
+        const typingStopTimerRef = React.useRef(null);
+
+        const initial = userName
+          ? (userName.trim().charAt(0) || '?').toUpperCase()
+          : '';
+
+        React.useEffect(() => {
+          if (!userName) return;
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, [messages, userName, remoteTypingName]);
+
+        React.useEffect(() => {
+          if (!userName) return undefined;
+
+          socketRef.current = io('{{ host }}');
+
+          const socket = socketRef.current;
+
+          socket.emit('join', {
+            data: {
+              userName,
+            },
+          });
+
+          socket.on('join', ({ data }) => {
+            messageIdRef.current += 1;
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: messageIdRef.current,
+                text: `${data.userName} entrou na sala`,
+                outgoing: false,
+                system: true,
+              },
+            ]);
+          });
+
+          socket.on('message_send', ({ data }) => {
+            messageIdRef.current += 1;
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: messageIdRef.current,
+                senderName: data.userName,
+                text: data.message,
+                outgoing: false,
+              },
+            ]);
+          });
+
+          socket.on('typing_started', (data) => {
+            setRemoteTypingName(data.userName);
+          });
+
+          socket.on('typing_stopped', () => {
+            setRemoteTypingName(null);
+          });
+
+          return () => {
+            if (typingStopTimerRef.current != null) {
+              clearTimeout(typingStopTimerRef.current);
+              typingStopTimerRef.current = null;
+            }
+            typingActiveRef.current = false;
+            socket.off('join');
+            socket.off('typing_started');
+            socket.off('message_send');
+            socket.off('typing_stopped');
+            socket.disconnect();
+            socketRef.current = null;
+          };
+        }, [userName]);
+
+        function stopTypingSession() {
+          const socket = socketRef.current;
+          if (typingStopTimerRef.current != null) {
+            clearTimeout(typingStopTimerRef.current);
+            typingStopTimerRef.current = null;
+          }
+          if (typingActiveRef.current && socket && socket.connected) {
+            typingActiveRef.current = false;
+            socket.emit('typing_stopped', { userName });
+          }
+        }
+
+        function handleJoin(e) {
+          e.preventDefault();
+          const trimmed = nameInput.trim();
+          if (!trimmed) return;
+          setUserName(trimmed);
+        }
+
+        function handleSend() {
+          const text = messageInput.trim();
+          if (!text || !userName) return;
+
+          stopTypingSession();
+
+          messageIdRef.current += 1;
+          setMessages((prev) => [
+            ...prev,
+            { id: messageIdRef.current, text, outgoing: true },
+          ]);
+          const socket = socketRef.current;
+          socket.emit('message_send', {
+            data: {
+              userName,
+              message: text,
+            },
+          });
+          setMessageInput('');
+        }
+
+        function handleMessageKeyDown(e) {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSend();
+          }
+        }
+
+        function handleMessageInputChange(e) {
+          const nextValue = e.target.value;
+          setMessageInput(nextValue);
+
+          const socket = socketRef.current;
+          if (!socket || !socket.connected) return;
+
+          if (!nextValue.trim()) {
+            stopTypingSession();
+            return;
+          }
+
+          if (!typingActiveRef.current) {
+            typingActiveRef.current = true;
+            socket.emit('typing_started', { userName });
+          }
+
+          if (typingStopTimerRef.current != null) {
+            clearTimeout(typingStopTimerRef.current);
+          }
+          typingStopTimerRef.current = setTimeout(() => {
+            typingStopTimerRef.current = null;
+            stopTypingSession();
+          }, TYPING_STOP_DEBOUNCE_MS);
+        }
+
+        function buildMessageNodes() {
+          const maxW = 'max-w-[min(85%,28rem)]';
+          const nodes = [];
+          let i = 0;
+          while (i < messages.length) {
+            const msg = messages[i];
+            if (msg.system) {
+              nodes.push(
+                <p
+                  key={msg.id}
+                  className='py-1 text-center text-xs text-slate-500'
+                >
+                  {msg.text}
+                </p>,
+              );
+              i += 1;
+              continue;
+            }
+            if (msg.outgoing) {
+              const group = [];
+              while (
+                i < messages.length &&
+                messages[i].outgoing &&
+                !messages[i].system
+              ) {
+                group.push(messages[i]);
+                i += 1;
+              }
+              nodes.push(
+                <div key={group[0].id} className='flex justify-end'>
+                  <div className={`flex flex-col items-end gap-1 ${maxW}`}>
+                    {group.map((m) => (
+                      <div
+                        key={m.id}
+                        className='rounded-2xl rounded-br-md bg-blue-600 px-4 py-2.5 text-sm text-white shadow-sm'
+                      >
+                        {m.text}
+                      </div>
+                    ))}
+                  </div>
+                </div>,
+              );
+              continue;
+            }
+            const senderKey = msg.senderName || '';
+            const group = [];
+            while (
+              i < messages.length &&
+              !messages[i].system &&
+              !messages[i].outgoing &&
+              (messages[i].senderName || '') === senderKey
+            ) {
+              group.push(messages[i]);
+              i += 1;
+            }
+            nodes.push(
+              <div key={group[0].id} className='flex justify-start'>
+                <div className={maxW}>
+                  {senderKey ? (
+                    <p className='mb-1 px-1 text-xs font-medium text-slate-500'>
+                      {senderKey}
+                    </p>
+                  ) : null}
+                  <div className='flex flex-col gap-1'>
+                    {group.map((m) => (
+                      <div
+                        key={m.id}
+                        className='rounded-2xl rounded-bl-md border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-800 shadow-sm'
+                      >
+                        {m.text}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>,
+            );
+          }
+          return nodes;
+        }
+
+        if (!userName) {
+          return (
+            <main className='flex min-h-screen items-center justify-center p-6'>
+              <div className='w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 shadow-sm'>
+                <h1 className='text-center text-2xl font-semibold tracking-tight text-slate-800'>
+                  Sala de bate-papo
+                </h1>
+                <p className='mt-2 text-center text-sm text-slate-500'>
+                  Informe como quer aparecer no chat
+                </p>
+                <form className='mt-8 space-y-4' onSubmit={handleJoin}>
+                  <div>
+                    <label
+                      htmlFor='display-name'
+                      className='mb-1.5 block text-sm font-medium text-slate-700'
+                    >
+                      Seu nome
+                    </label>
+                    <input
+                      id='display-name'
+                      type='text'
+                      autoComplete='nickname'
+                      maxLength={40}
+                      value={nameInput}
+                      onChange={(e) => setNameInput(e.target.value)}
+                      placeholder='Ex.: Maria'
+                      className='w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-900 outline-none ring-blue-500/20 transition focus:border-blue-500 focus:bg-white focus:ring-4'
+                    />
+                  </div>
+                  <button
+                    type='submit'
+                    className='w-full rounded-xl bg-blue-600 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-500/30'
+                  >
+                    Entrar no chat
+                  </button>
+                </form>
+              </div>
+            </main>
+          );
+        }
+
+        return (
+          <div className='flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden bg-slate-100'>
+            <header className='fixed inset-x-0 top-0 z-30 flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-3 shadow-sm'>
+              <div
+                className='flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-blue-600 text-lg font-semibold text-white'
+                aria-hidden
+              >
+                {initial}
+              </div>
+              <div className='min-w-0'>
+                <p className='truncate text-sm font-medium text-slate-500'>
+                  Você está conectado como
+                </p>
+                <p className='truncate text-base font-semibold text-slate-900'>
+                  {userName}
+                </p>
+              </div>
+            </header>
+
+            <main className='flex min-h-0 flex-1 flex-col overflow-hidden pt-[4.75rem]'>
+              <div className='flex-1 space-y-3 overflow-y-auto px-4 py-4'>
+                {messages.length === 0 ? (
+                  <p className='py-8 text-center text-sm text-slate-500'>
+                    Nenhuma mensagem ainda. Digite abaixo para enviar.
+                  </p>
+                ) : (
+                  buildMessageNodes()
+                )}
+                {remoteTypingName ? (
+                  <div className='flex justify-start pt-1'>
+                    <div
+                      className='inline-flex max-w-[min(85%,28rem)] items-center gap-2 rounded-2xl rounded-bl-md border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-500 shadow-sm'
+                      aria-live='polite'
+                    >
+                      <span className='flex items-center gap-0.5'>
+                        <span
+                          className='inline-block h-1.5 w-1.5 animate-bounce rounded-full bg-blue-500'
+                          style={typingDotDelays[0]}
+                        />
+                        <span
+                          className='inline-block h-1.5 w-1.5 animate-bounce rounded-full bg-blue-500'
+                          style={typingDotDelays[1]}
+                        />
+                        <span
+                          className='inline-block h-1.5 w-1.5 animate-bounce rounded-full bg-blue-500'
+                          style={typingDotDelays[2]}
+                        />
+                      </span>
+                      <span className='text-xs sm:text-sm'>
+                        <span className='font-medium text-slate-600'>
+                          {remoteTypingName}
+                        </span>{' '}
+                        está digitando…
+                      </span>
+                    </div>
+                  </div>
+                ) : null}
+                <div ref={messagesEndRef} />
+              </div>
+
+              <div className='shrink-0 border-t border-slate-200 bg-white p-4'>
+                <div className='mx-auto flex max-w-3xl gap-2'>
+                  <textarea
+                    rows={1}
+                    value={messageInput}
+                    onChange={handleMessageInputChange}
+                    onKeyDown={handleMessageKeyDown}
+                    placeholder='Digite uma mensagem… (Enter para enviar)'
+                    className='min-h-[48px] flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none ring-blue-500/20 transition focus:border-blue-500 focus:bg-white focus:ring-4'
+                  />
+                  <button
+                    type='button'
+                    onClick={handleSend}
+                    className='shrink-0 self-end rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-500/30'
+                  >
+                    Enviar
+                  </button>
+                </div>
+              </div>
+            </main>
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
