@@ -2,6 +2,8 @@
 
 Aplicação web de sala de bate-papo em tempo real usando **Flask**, **Flask-SocketIO** e uma interface em **React** (via CDN) servida pelo próprio Flask.
 
+https://github.com/user-attachments/assets/cc212f76-1240-4c34-ae98-e465f32cd875
+
 ## Pré-requisitos
 
 - **Python** `>= 3.12.10` (conforme `pyproject.toml`)
